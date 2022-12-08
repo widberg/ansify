@@ -8,6 +8,8 @@ use std::collections::BTreeMap;
 use std::fs::File;
 use std::path::PathBuf;
 use std::vec::Vec;
+use ansi_term::Colour::{Fixed};
+
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -29,6 +31,9 @@ struct Cli {
 
     #[arg(short = 'H', long, value_name = "HEIGHT")]
     height: Option<u32>,
+
+    #[arg(short, long)]
+    text: bool,
 }
 
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
@@ -200,6 +205,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             )
             .unwrap();
         let texel = nearest[0].1;
+        if cli.text {
+            print!("{}", Fixed(texel.foreground_color).on(Fixed(texel.background_color)).paint(texel.block.to_string()));
+            if x + 1 == img.width() {
+                println!("");
+            }
+        }
         for i in 0..blocks.width {
             for j in 0..blocks.height {
                 out.put_pixel(
