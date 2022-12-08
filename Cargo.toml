@@ -1,0 +1,12 @@
+[package]
+name = "img2ansi"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ansi_term = "0.12.1"
+clap = { version = "4.0.29", features = ["derive"] }
+image = "0.24.5"
+kdtree = "0.6.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_yaml = "0.9"
