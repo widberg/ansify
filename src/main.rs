@@ -92,13 +92,17 @@ fn normalize_color(color: &[u8; 3]) -> [f32; 3] {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
-    println!("Generating kdtree");
+    println!("Opening and parsing palette");
 
     let file = File::open(cli.palette)?;
     let palette: Palette = serde_yaml::from_reader(&file)?;
 
+    println!("Opening and parsing blocks");
+
     let file2 = File::open(cli.blocks)?;
     let blocks: Blocks = serde_yaml::from_reader(&file2)?;
+
+    println!("Verifying block dimensions");
 
     for (_character, bitmap) in blocks.blocks.iter() {
         assert!(bitmap.len() == blocks.height as usize);
@@ -107,7 +111,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    println!("Opening original image");
+
     let original_image = ImageReader::open(cli.input)?.decode()?.into_rgb8();
+
+    println!("Calculating dimension and resizing");
 
     let ratio = (original_image.width() as f32 / blocks.width as f32)
         / (original_image.height() as f32 / blocks.height as f32);
@@ -131,7 +139,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    let mut shades: Vec<Shade> = Vec::new();
+    println!("Generating shades");
+
+    let mut shades = Vec::new();
     for (character, bitmap) in blocks.blocks.iter() {
         shades.push(Shade {
             ratio: count_foreground_pixels(bitmap) as f32 / (blocks.width * blocks.height) as f32,
@@ -139,9 +149,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
-    let mut kdtree = KdTree::new(3);
+    let mut kdtree = Box::new(KdTree::new(3));
 
-    for shade in shades {
+    println!("Generating texels");
+
+    for shade in shades.iter() {
         if ratio == 0.0 {
             for (i, color) in palette.colors.iter().enumerate() {
                 kdtree.add(
@@ -187,6 +199,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }
+
+    println!("Creating output image");
 
     let mut out = RgbImage::new(img.width() * blocks.width, img.height() * blocks.height);
 
