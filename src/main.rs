@@ -16,7 +16,7 @@ struct Cli {
     input: PathBuf,
 
     #[arg(short, long, value_name = "OUTPUT_PATH")]
-    output: PathBuf,
+    output: Option<PathBuf>,
 
     #[arg(short, long, value_name = "PALETTE_PATH")]
     palette: PathBuf,
@@ -245,7 +245,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Writing output");
 
-    out.save(cli.output)?;
+    if let Some(output_path) = cli.output {
+        out.save(output_path)?;
+    }
 
     println!("Done");
 
