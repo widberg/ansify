@@ -1,15 +1,13 @@
+use ansi_term::Colour::Fixed;
 use clap::Parser;
 use image::io::Reader as ImageReader;
 use image::RgbImage;
-use kdtree::distance::squared_euclidean;
-use kdtree::KdTree;
+use kd_tree::KdMap;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::path::PathBuf;
 use std::vec::Vec;
-use ansi_term::Colour::{Fixed};
-
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -60,17 +58,11 @@ struct Texel {
 }
 
 fn count_foreground_pixels(bitmap: &Vec<Vec<bool>>) -> u32 {
-    let mut result = 0;
-
-    for row in bitmap {
-        for bit in row {
-            if *bit {
-                result += 1;
-            }
-        }
-    }
-
-    return result;
+    return bitmap
+        .into_iter()
+        .flat_map(IntoIterator::into_iter)
+        .map(|x| *x as u32)
+        .sum();
 }
 
 fn blend_two_colors(color_a: &[f32; 3], color_b: &[f32; 3], ratio: f32) -> [f32; 3] {
@@ -113,7 +105,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Opening original image");
 
-    let original_image = ImageReader::open(cli.input)?.decode()?.into_rgb8();
+    let original_image = ImageReader::open(cli.input)?.decode()?;
 
     println!("Calculating dimension and resizing");
 
@@ -122,22 +114,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let img = match (cli.width, cli.height) {
         (None, None) => original_image,
-        (Some(width), None) => image::imageops::resize(
-            &original_image,
+        (Some(width), None) => original_image.resize_exact(
             width,
             (width as f32 / ratio) as u32,
             image::imageops::Lanczos3,
         ),
-        (None, Some(height)) => image::imageops::resize(
-            &original_image,
+        (None, Some(height)) => original_image.resize_exact(
             (height as f32 * ratio) as u32,
             height,
             image::imageops::Lanczos3,
         ),
         (Some(width), Some(height)) => {
-            image::imageops::resize(&original_image, width, height, image::imageops::Lanczos3)
+            original_image.resize_exact(width, height, image::imageops::Lanczos3)
         }
-    };
+    }
+    .into_rgb8();
 
     println!("Generating shades");
 
@@ -149,32 +140,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
-    let mut kdtree = Box::new(KdTree::new(3));
-
     println!("Generating texels");
+
+    let mut texels = Vec::new();
 
     for shade in shades.iter() {
         if ratio == 0.0 {
             for (i, color) in palette.colors.iter().enumerate() {
-                kdtree.add(
+                texels.push((
                     normalize_color(color),
                     Texel {
                         foreground_color: 0 as u8,
                         background_color: i as u8,
                         block: shade.block,
                     },
-                )?;
+                ));
             }
         } else if ratio == 1.0 {
             for (i, color) in palette.colors.iter().enumerate() {
-                kdtree.add(
+                texels.push((
                     normalize_color(color),
                     Texel {
                         foreground_color: i as u8,
                         background_color: 0 as u8,
                         block: shade.block,
                     },
-                )?;
+                ));
             }
         } else {
             for (i, foreground_color) in palette.colors.iter().enumerate() {
@@ -187,18 +178,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         &normalize_color(background_color),
                         shade.ratio,
                     );
-                    kdtree.add(
+                    texels.push((
                         color,
                         Texel {
                             foreground_color: i as u8,
                             background_color: j as u8,
                             block: shade.block,
                         },
-                    )?;
+                    ));
                 }
             }
         }
     }
+
+    println!("Generate kdtree");
+
+    let kdtree = KdMap::build_by_ordered_float(texels);
 
     println!("Creating output image");
 
@@ -208,19 +203,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     for (x, y, pixel) in img.enumerate_pixels() {
         let nearest = kdtree
-            .nearest(
-                &vec![
-                    pixel.0[0] as f32 / 255.0,
-                    pixel.0[1] as f32 / 255.0,
-                    pixel.0[2] as f32 / 255.0,
-                ],
-                1,
-                &squared_euclidean,
-            )
-            .unwrap();
-        let texel = nearest[0].1;
+            .nearest(&[
+                pixel.0[0] as f32 / 255.0,
+                pixel.0[1] as f32 / 255.0,
+                pixel.0[2] as f32 / 255.0,
+            ])
+            .unwrap()
+            .item;
+        let texel = &nearest.1;
         if cli.text {
-            print!("{}", Fixed(texel.foreground_color).on(Fixed(texel.background_color)).paint(texel.block.to_string()));
+            print!(
+                "{}",
+                Fixed(texel.foreground_color)
+                    .on(Fixed(texel.background_color))
+                    .paint(texel.block.to_string())
+            );
             if x + 1 == img.width() {
                 println!("");
             }
@@ -246,12 +243,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    println!("Done");
+    println!("Writing output");
 
-    out.write_to(
-        &mut File::create(cli.output)?,
-        image::ImageOutputFormat::Bmp,
-    )?;
+    out.save(cli.output)?;
+
+    println!("Done");
 
     return Ok(());
 }
