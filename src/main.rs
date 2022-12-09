@@ -1,7 +1,6 @@
 use ansi_term::Colour::Fixed;
 use clap::{Parser, Subcommand};
-use image::gif::GifDecoder;
-use image::gif::GifEncoder;
+use image::gif::{GifDecoder, GifEncoder, Repeat};
 use image::io::Reader as ImageReader;
 use image::AnimationDecoder;
 use image::Frame;
@@ -364,6 +363,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let file_out = File::create(output)?;
             let mut encoder = GifEncoder::new(file_out);
+            encoder.set_repeat(Repeat::Infinite)?;
 
             for frame in decoder.into_frames() {
                 let frame = frame?;
