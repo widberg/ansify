@@ -4,10 +4,12 @@ use image::io::Reader as ImageReader;
 use image::RgbImage;
 use kd_tree::KdMap;
 use serde::{Deserialize, Serialize};
+use show_image::create_window;
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::path::PathBuf;
 use std::vec::Vec;
+use log::info;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -34,7 +36,7 @@ struct Cli {
     text: bool,
 
     #[arg(short, long)]
-    verbose: bool,
+    show: bool,
 }
 
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
@@ -84,26 +86,23 @@ fn normalize_color(color: &[u8; 3]) -> [f32; 3] {
     ];
 }
 
+#[show_image::main]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
-    if cli.verbose {
-        println!("Opening and parsing palette");
-    }
+    env_logger::init();
+
+    info!("Opening and parsing palette");
 
     let file = File::open(cli.palette)?;
     let palette: Palette = serde_yaml::from_reader(&file)?;
 
-    if cli.verbose {
-        println!("Opening and parsing blocks");
-    }
+    info!("Opening and parsing blocks");
 
     let file2 = File::open(cli.blocks)?;
     let blocks: Blocks = serde_yaml::from_reader(&file2)?;
 
-    if cli.verbose {
-        println!("Verifying block dimensions");
-    }
+    info!("Verifying block dimensions");
 
     for (_character, bitmap) in blocks.blocks.iter() {
         assert!(bitmap.len() == blocks.height as usize);
@@ -112,15 +111,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    if cli.verbose {
-        println!("Opening original image");
-    }
+    info!("Opening original image");
 
     let original_image = ImageReader::open(cli.input)?.decode()?;
 
-    if cli.verbose {
-        println!("Calculating dimension and resizing");
-    }
+    info!("Calculating dimension and resizing");
 
     let ratio = (original_image.width() as f32 / blocks.width as f32)
         / (original_image.height() as f32 / blocks.height as f32);
@@ -143,9 +138,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     .into_rgb8();
 
-    if cli.verbose {
-        println!("Generating shades");
-    }
+    info!("Generating shades");
 
     let mut shades = Vec::new();
     for (character, bitmap) in blocks.blocks.iter() {
@@ -155,9 +148,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
-    if cli.verbose {
-        println!("Generating texels");
-    }
+    info!("Generating texels");
 
     let mut texels = Vec::new();
 
@@ -208,21 +199,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    if cli.verbose {
-        println!("Generate kdtree");
-    }
+    info!("Generate kdtree");
 
     let kdtree = KdMap::par_build_by_ordered_float(texels);
 
-    if cli.verbose {
-        println!("Creating output image");
-    }
+    info!("Creating output image");
 
     let mut out = RgbImage::new(img.width() * blocks.width, img.height() * blocks.height);
 
-    if cli.verbose {
-        println!("Generating output");
-    }
+    info!("Generating output");
 
     for (x, y, pixel) in img.enumerate_pixels() {
         let nearest = kdtree
@@ -267,16 +252,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     if let Some(output_path) = cli.output {
-        if cli.verbose {
-            println!("Writing output");
-        }
+        info!("Writing output");
 
         out.save(output_path)?;
     }
 
-    if cli.verbose {
-        println!("Done");
+    if cli.show {
+        info!("Showing image");
+
+        let window = create_window("image", Default::default())?;
+        window.set_image("image-001", out)?;
+        window.wait_until_destroyed()?;
     }
+
+    info!("Done");
 
     return Ok(());
 }

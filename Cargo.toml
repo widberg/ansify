@@ -6,8 +6,12 @@ edition = "2021"
 [dependencies]
 ansi_term = "0.12.1"
 clap = { version = "4.0.29", features = ["derive"] }
+env_logger = "0.10.0"
 image = "0.24.5"
 kd-tree = { version = "0.5.0", features = ["rayon"] }
+log = "0.4.17"
+nokhwa = "0.9.4"
 rayon = "1.6.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_yaml = "0.9"
+show-image = { version = "0.13.1", features = ["image"] }
