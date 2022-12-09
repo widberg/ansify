@@ -1,24 +1,23 @@
 use ansi_term::Colour::Fixed;
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use image::io::Reader as ImageReader;
-use image::{RgbImage, GenericImageView};
+use image::{DynamicImage, GenericImageView, RgbImage};
 use kd_tree::KdMap;
+use log::info;
+use nokhwa::Camera;
 use serde::{Deserialize, Serialize};
 use show_image::create_window;
+use show_image::WindowOptions;
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::path::PathBuf;
 use std::vec::Vec;
-use log::info;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 struct Cli {
-    #[arg(short, long, value_name = "INPUT_PATH")]
-    input: PathBuf,
-
-    #[arg(short, long, value_name = "OUTPUT_PATH")]
-    output: Option<PathBuf>,
+    #[command(subcommand)]
+    command: Commands,
 
     #[arg(short, long, value_name = "PALETTE_PATH")]
     palette: PathBuf,
@@ -31,12 +30,27 @@ struct Cli {
 
     #[arg(short = 'H', long, value_name = "HEIGHT")]
     height: Option<u32>,
+}
 
-    #[arg(short, long)]
-    text: bool,
+#[derive(Subcommand)]
+enum Commands {
+    Image {
+        #[arg(short, long, value_name = "INPUT_PATH")]
+        input: PathBuf,
 
-    #[arg(short, long)]
-    show: bool,
+        #[arg(short, long, value_name = "OUTPUT_PATH")]
+        output: Option<PathBuf>,
+
+        #[arg(short, long)]
+        text: bool,
+
+        #[arg(short, long)]
+        show: bool,
+    },
+    Webcam {
+        #[arg(short, long)]
+        index: usize,
+    },
 }
 
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
@@ -99,15 +113,16 @@ impl ANSIfier {
         let mut shades = Vec::new();
         for (character, bitmap) in blocks.blocks.iter() {
             shades.push(Shade {
-                ratio: count_foreground_pixels(bitmap) as f32 / (blocks.width * blocks.height) as f32,
+                ratio: count_foreground_pixels(bitmap) as f32
+                    / (blocks.width * blocks.height) as f32,
                 block: *character,
             });
         }
-    
+
         info!("Generating texels");
-    
+
         let mut texels = Vec::new();
-    
+
         for shade in shades.iter() {
             if shade.ratio == 0.0 {
                 for (i, color) in palette.colors.iter().enumerate() {
@@ -154,26 +169,30 @@ impl ANSIfier {
                 }
             }
         }
-    
+
         info!("Generate kdtree");
-    
+
         return ANSIfier {
             palette,
             blocks,
             kdtree: KdMap::par_build_by_ordered_float(texels),
-        }
+        };
     }
 
-    fn process(self, img: &RgbImage) -> (RgbImage, String) {
+    fn process(&self, img: &RgbImage) -> (RgbImage, String) {
         info!("Creating output image");
 
-        let mut out = RgbImage::new(img.width() * self.blocks.width, img.height() * self.blocks.height);
+        let mut out = RgbImage::new(
+            img.width() * self.blocks.width,
+            img.height() * self.blocks.height,
+        );
         let mut text = String::new();
-    
+
         info!("Generating output");
-    
+
         for (x, y, pixel) in img.enumerate_pixels() {
-            let nearest = self.kdtree
+            let nearest = self
+                .kdtree
                 .nearest(&[
                     pixel.0[0] as f32 / 255.0,
                     pixel.0[1] as f32 / 255.0,
@@ -183,11 +202,12 @@ impl ANSIfier {
                 .item;
             let texel = &nearest.1;
             text.push_str(
-                    &Fixed(texel.foreground_color)
-                        .on(Fixed(texel.background_color))
-                        .paint(texel.block.to_string()).to_string()
-                );
-            
+                &Fixed(texel.foreground_color)
+                    .on(Fixed(texel.background_color))
+                    .paint(texel.block.to_string())
+                    .to_string(),
+            );
+
             if x + 1 == img.width() {
                 text.push('\n');
             }
@@ -197,12 +217,14 @@ impl ANSIfier {
                         x * self.blocks.width + i,
                         y * self.blocks.height + j,
                         if self.blocks.blocks[&texel.block][j as usize][i as usize] {
-                            let foreground_color = self.palette.colors[texel.foreground_color as usize];
+                            let foreground_color =
+                                self.palette.colors[texel.foreground_color as usize];
                             image::Rgb {
                                 0: foreground_color,
                             }
                         } else {
-                            let background_color = self.palette.colors[texel.background_color as usize];
+                            let background_color =
+                                self.palette.colors[texel.background_color as usize];
                             image::Rgb {
                                 0: background_color,
                             }
@@ -216,7 +238,11 @@ impl ANSIfier {
     }
 }
 
-fn calculate_new_dimensions(original_dimensions: (u32, u32), new_dimensions: (Option<u32>, Option<u32>), block_dimensions: (u32, u32)) -> (u32, u32) {
+fn calculate_new_dimensions(
+    original_dimensions: (u32, u32),
+    new_dimensions: (Option<u32>, Option<u32>),
+    block_dimensions: (u32, u32),
+) -> (u32, u32) {
     info!("Calculating dimension and resizing");
 
     let ratio = (original_dimensions.0 as f32 / block_dimensions.0 as f32)
@@ -226,7 +252,7 @@ fn calculate_new_dimensions(original_dimensions: (u32, u32), new_dimensions: (Op
         (None, None) => original_dimensions,
         (Some(width), None) => (width, (width as f32 / ratio) as u32),
         (None, Some(height)) => ((height as f32 * ratio) as u32, height),
-        (Some(width), Some(height)) => (width, height)
+        (Some(width), Some(height)) => (width, height),
     };
 }
 
@@ -245,9 +271,9 @@ impl Blocks {
 
         let file2 = File::open(path)?;
         let blocks: Blocks = serde_yaml::from_reader(&file2)?;
-    
+
         info!("Verifying block dimensions");
-    
+
         for (_character, bitmap) in blocks.blocks.iter() {
             assert!(bitmap.len() == blocks.height as usize);
             for row in bitmap {
@@ -266,39 +292,108 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
 
     let palette = Palette::from(cli.palette)?;
-
     let blocks = Blocks::from(cli.blocks)?;
-
-    info!("Opening original image");
-
-    let original_image = ImageReader::open(cli.input)?.decode()?;
-
-    info!("Calculating dimension and resizing");
-
-    let new_dimensions = calculate_new_dimensions(original_image.dimensions(), (cli.width, cli.height), (blocks.width, blocks.height));
-
-    let img = original_image.resize_exact(new_dimensions.0, new_dimensions.1, image::imageops::Lanczos3).into_rgb8();
-
+    let block_dimensions = (blocks.width, blocks.height);
     let ansifier = ANSIfier::new(palette, blocks);
 
-    let (out, text) = ansifier.process(&img);
+    match &cli.command {
+        Commands::Image {
+            input,
+            output,
+            text,
+            show,
+        } => {
+            info!("Opening original image");
+            let original_image = ImageReader::open(input)?.decode()?;
 
-    if cli.text {
-        print!("{}", text);
-    }
+            info!("Calculating dimension and resizing");
+            let new_dimensions = calculate_new_dimensions(
+                original_image.dimensions(),
+                (cli.width, cli.height),
+                block_dimensions,
+            );
+            let img = original_image
+                .resize_exact(
+                    new_dimensions.0,
+                    new_dimensions.1,
+                    image::imageops::Lanczos3,
+                )
+                .into_rgb8();
 
-    if let Some(output_path) = cli.output {
-        info!("Writing output");
+            let (out, out_text) = ansifier.process(&img);
 
-        out.save(output_path)?;
-    }
+            if *text {
+                print!("{}", out_text);
+            }
 
-    if cli.show {
-        info!("Showing image");
+            if let Some(output_path) = output {
+                info!("Writing output");
 
-        let window = create_window("image", Default::default())?;
-        window.set_image("image-001", out)?;
-        window.wait_until_destroyed()?;
+                out.save(output_path)?;
+            }
+
+            if *show {
+                info!("Showing image");
+
+                let window = create_window(
+                    "img2ansi",
+                    WindowOptions::new().set_size([
+                        new_dimensions.0 * block_dimensions.0,
+                        new_dimensions.1 * block_dimensions.1,
+                    ]),
+                )?;
+                window.set_image("image", out)?;
+                window.wait_until_destroyed()?;
+            }
+        }
+        Commands::Webcam { index } => {
+            info!("Creating webcam");
+            let mut camera = Camera::new(*index, None)?;
+            camera.open_stream()?;
+
+            info!("Getting webcame image");
+            let original_image = camera.frame()?;
+
+            info!("Calculating dimension and resizing");
+
+            let new_dimensions = calculate_new_dimensions(
+                original_image.dimensions(),
+                (cli.width, cli.height),
+                block_dimensions,
+            );
+
+            info!("Creating image window");
+
+            let window = create_window(
+                "img2ansi",
+                WindowOptions::new().set_size([
+                    new_dimensions.0 * block_dimensions.0,
+                    new_dimensions.1 * block_dimensions.1,
+                ]),
+            )?;
+
+            loop {
+                let original_image = camera.frame()?;
+
+                let img = DynamicImage::ImageRgb8(original_image)
+                    .resize_exact(
+                        new_dimensions.0,
+                        new_dimensions.1,
+                        image::imageops::Lanczos3,
+                    )
+                    .into_rgb8();
+
+                let (out, _) = (&ansifier).process(&img);
+
+                info!("Showing image");
+
+                if window.set_image("image", out).is_err() {
+                    info!("Closing window");
+
+                    break;
+                }
+            }
+        }
     }
 
     info!("Done");
