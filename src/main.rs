@@ -270,7 +270,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if cli.verbose {
             println!("Writing output");
         }
-    
+
         out.save(output_path)?;
     }
 
