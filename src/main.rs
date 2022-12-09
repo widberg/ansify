@@ -1,6 +1,10 @@
 use ansi_term::Colour::Fixed;
 use clap::{Parser, Subcommand};
+use image::gif::GifDecoder;
+use image::gif::GifEncoder;
 use image::io::Reader as ImageReader;
+use image::AnimationDecoder;
+use image::Frame;
 use image::{DynamicImage, GenericImageView, RgbImage};
 use kd_tree::KdMap;
 use log::info;
@@ -46,6 +50,13 @@ enum Commands {
 
         #[arg(short, long)]
         show: bool,
+    },
+    Gif {
+        #[arg(short, long, value_name = "INPUT_PATH")]
+        input: PathBuf,
+
+        #[arg(short, long, value_name = "OUTPUT_PATH")]
+        output: PathBuf,
     },
     Webcam {
         #[arg(short, long)]
@@ -344,6 +355,50 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 )?;
                 window.set_image("image", out)?;
                 window.wait_until_destroyed()?;
+            }
+        }
+        Commands::Gif { input, output } => {
+            info!("Opening original image");
+            let file_in = File::open(input)?;
+            let decoder = GifDecoder::new(file_in)?;
+
+            let file_out = File::create(output)?;
+            let mut encoder = GifEncoder::new(file_out);
+
+            for frame in decoder.into_frames() {
+                let frame = frame?;
+                info!("Calculating dimension and resizing");
+                let left = frame.left();
+                let top = frame.top();
+                let delay = frame.delay();
+                let original_image = DynamicImage::ImageRgba8(frame.into_buffer());
+
+                let new_dimensions = calculate_new_dimensions(
+                    original_image.dimensions(),
+                    (cli.width, cli.height),
+                    block_dimensions,
+                );
+                let img = original_image
+                    .resize_exact(
+                        new_dimensions.0,
+                        new_dimensions.1,
+                        image::imageops::Lanczos3,
+                    )
+                    .into_rgb8();
+
+                let (out, _) = ansifier.process(&img);
+
+                let left =
+                    (left as f32 / original_image.width() as f32 * new_dimensions.0 as f32) as u32;
+                let top =
+                    (top as f32 / original_image.height() as f32 * new_dimensions.1 as f32) as u32;
+
+                encoder.encode_frame(Frame::from_parts(
+                    DynamicImage::ImageRgb8(out).to_rgba8(),
+                    left,
+                    top,
+                    delay,
+                ))?;
             }
         }
         Commands::Webcam { index } => {
