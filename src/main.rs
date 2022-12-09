@@ -32,6 +32,9 @@ struct Cli {
 
     #[arg(short, long)]
     text: bool,
+
+    #[arg(short, long)]
+    verbose: bool,
 }
 
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
@@ -84,17 +87,23 @@ fn normalize_color(color: &[u8; 3]) -> [f32; 3] {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
-    println!("Opening and parsing palette");
+    if cli.verbose {
+        println!("Opening and parsing palette");
+    }
 
     let file = File::open(cli.palette)?;
     let palette: Palette = serde_yaml::from_reader(&file)?;
 
-    println!("Opening and parsing blocks");
+    if cli.verbose {
+        println!("Opening and parsing blocks");
+    }
 
     let file2 = File::open(cli.blocks)?;
     let blocks: Blocks = serde_yaml::from_reader(&file2)?;
 
-    println!("Verifying block dimensions");
+    if cli.verbose {
+        println!("Verifying block dimensions");
+    }
 
     for (_character, bitmap) in blocks.blocks.iter() {
         assert!(bitmap.len() == blocks.height as usize);
@@ -103,11 +112,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    println!("Opening original image");
+    if cli.verbose {
+        println!("Opening original image");
+    }
 
     let original_image = ImageReader::open(cli.input)?.decode()?;
 
-    println!("Calculating dimension and resizing");
+    if cli.verbose {
+        println!("Calculating dimension and resizing");
+    }
 
     let ratio = (original_image.width() as f32 / blocks.width as f32)
         / (original_image.height() as f32 / blocks.height as f32);
@@ -130,7 +143,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     .into_rgb8();
 
-    println!("Generating shades");
+    if cli.verbose {
+        println!("Generating shades");
+    }
 
     let mut shades = Vec::new();
     for (character, bitmap) in blocks.blocks.iter() {
@@ -140,7 +155,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
-    println!("Generating texels");
+    if cli.verbose {
+        println!("Generating texels");
+    }
 
     let mut texels = Vec::new();
 
@@ -191,15 +208,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    println!("Generate kdtree");
+    if cli.verbose {
+        println!("Generate kdtree");
+    }
 
-    let kdtree = KdMap::build_by_ordered_float(texels);
+    let kdtree = KdMap::par_build_by_ordered_float(texels);
 
-    println!("Creating output image");
+    if cli.verbose {
+        println!("Creating output image");
+    }
 
     let mut out = RgbImage::new(img.width() * blocks.width, img.height() * blocks.height);
 
-    println!("Generating output");
+    if cli.verbose {
+        println!("Generating output");
+    }
 
     for (x, y, pixel) in img.enumerate_pixels() {
         let nearest = kdtree
@@ -243,13 +266,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    println!("Writing output");
-
     if let Some(output_path) = cli.output {
+        if cli.verbose {
+            println!("Writing output");
+        }
+    
         out.save(output_path)?;
     }
 
-    println!("Done");
+    if cli.verbose {
+        println!("Done");
+    }
 
     return Ok(());
 }
