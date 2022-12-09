@@ -1,7 +1,7 @@
 use ansi_term::Colour::Fixed;
 use clap::Parser;
 use image::io::Reader as ImageReader;
-use image::RgbImage;
+use image::{RgbImage, GenericImageView};
 use kd_tree::KdMap;
 use serde::{Deserialize, Serialize};
 use show_image::create_window;
@@ -216,30 +216,58 @@ impl ANSIfier {
     }
 }
 
+fn calculate_new_dimensions(original_dimensions: (u32, u32), new_dimensions: (Option<u32>, Option<u32>), block_dimensions: (u32, u32)) -> (u32, u32) {
+    info!("Calculating dimension and resizing");
+
+    let ratio = (original_dimensions.0 as f32 / block_dimensions.0 as f32)
+        / (original_dimensions.1 as f32 / block_dimensions.1 as f32);
+
+    return match new_dimensions {
+        (None, None) => original_dimensions,
+        (Some(width), None) => (width, (width as f32 / ratio) as u32),
+        (None, Some(height)) => ((height as f32 * ratio) as u32, height),
+        (Some(width), Some(height)) => (width, height)
+    };
+}
+
+impl Palette {
+    fn from(path: PathBuf) -> Result<Palette, Box<dyn std::error::Error>> {
+        info!("Opening and parsing palette");
+
+        let file = File::open(path)?;
+        return Ok(serde_yaml::from_reader(&file)?);
+    }
+}
+
+impl Blocks {
+    fn from(path: PathBuf) -> Result<Blocks, Box<dyn std::error::Error>> {
+        info!("Opening and parsing blocks");
+
+        let file2 = File::open(path)?;
+        let blocks: Blocks = serde_yaml::from_reader(&file2)?;
+    
+        info!("Verifying block dimensions");
+    
+        for (_character, bitmap) in blocks.blocks.iter() {
+            assert!(bitmap.len() == blocks.height as usize);
+            for row in bitmap {
+                assert!(row.len() == blocks.width as usize);
+            }
+        }
+
+        return Ok(blocks);
+    }
+}
+
 #[show_image::main]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
     env_logger::init();
 
-    info!("Opening and parsing palette");
+    let palette = Palette::from(cli.palette)?;
 
-    let file = File::open(cli.palette)?;
-    let palette: Palette = serde_yaml::from_reader(&file)?;
-
-    info!("Opening and parsing blocks");
-
-    let file2 = File::open(cli.blocks)?;
-    let blocks: Blocks = serde_yaml::from_reader(&file2)?;
-
-    info!("Verifying block dimensions");
-
-    for (_character, bitmap) in blocks.blocks.iter() {
-        assert!(bitmap.len() == blocks.height as usize);
-        for row in bitmap {
-            assert!(row.len() == blocks.width as usize);
-        }
-    }
+    let blocks = Blocks::from(cli.blocks)?;
 
     info!("Opening original image");
 
@@ -247,26 +275,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("Calculating dimension and resizing");
 
-    let ratio = (original_image.width() as f32 / blocks.width as f32)
-        / (original_image.height() as f32 / blocks.height as f32);
+    let new_dimensions = calculate_new_dimensions(original_image.dimensions(), (cli.width, cli.height), (blocks.width, blocks.height));
 
-    let img = match (cli.width, cli.height) {
-        (None, None) => original_image,
-        (Some(width), None) => original_image.resize_exact(
-            width,
-            (width as f32 / ratio) as u32,
-            image::imageops::Lanczos3,
-        ),
-        (None, Some(height)) => original_image.resize_exact(
-            (height as f32 * ratio) as u32,
-            height,
-            image::imageops::Lanczos3,
-        ),
-        (Some(width), Some(height)) => {
-            original_image.resize_exact(width, height, image::imageops::Lanczos3)
-        }
-    }
-    .into_rgb8();
+    let img = original_image.resize_exact(new_dimensions.0, new_dimensions.1, image::imageops::Lanczos3).into_rgb8();
 
     let ansifier = ANSIfier::new(palette, blocks);
 
