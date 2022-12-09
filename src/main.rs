@@ -86,6 +86,136 @@ fn normalize_color(color: &[u8; 3]) -> [f32; 3] {
     ];
 }
 
+struct ANSIfier {
+    palette: Palette,
+    blocks: Blocks,
+    kdtree: KdMap<[f32; 3], Texel>,
+}
+
+impl ANSIfier {
+    fn new(palette: Palette, blocks: Blocks) -> ANSIfier {
+        info!("Generating shades");
+
+        let mut shades = Vec::new();
+        for (character, bitmap) in blocks.blocks.iter() {
+            shades.push(Shade {
+                ratio: count_foreground_pixels(bitmap) as f32 / (blocks.width * blocks.height) as f32,
+                block: *character,
+            });
+        }
+    
+        info!("Generating texels");
+    
+        let mut texels = Vec::new();
+    
+        for shade in shades.iter() {
+            if shade.ratio == 0.0 {
+                for (i, color) in palette.colors.iter().enumerate() {
+                    texels.push((
+                        normalize_color(color),
+                        Texel {
+                            foreground_color: 0 as u8,
+                            background_color: i as u8,
+                            block: shade.block,
+                        },
+                    ));
+                }
+            } else if shade.ratio == 1.0 {
+                for (i, color) in palette.colors.iter().enumerate() {
+                    texels.push((
+                        normalize_color(color),
+                        Texel {
+                            foreground_color: i as u8,
+                            background_color: 0 as u8,
+                            block: shade.block,
+                        },
+                    ));
+                }
+            } else {
+                for (i, foreground_color) in palette.colors.iter().enumerate() {
+                    for (j, background_color) in palette.colors.iter().enumerate() {
+                        if foreground_color == background_color {
+                            continue;
+                        }
+                        let color = blend_two_colors(
+                            &normalize_color(foreground_color),
+                            &normalize_color(background_color),
+                            shade.ratio,
+                        );
+                        texels.push((
+                            color,
+                            Texel {
+                                foreground_color: i as u8,
+                                background_color: j as u8,
+                                block: shade.block,
+                            },
+                        ));
+                    }
+                }
+            }
+        }
+    
+        info!("Generate kdtree");
+    
+        return ANSIfier {
+            palette,
+            blocks,
+            kdtree: KdMap::par_build_by_ordered_float(texels),
+        }
+    }
+
+    fn process(self, img: &RgbImage) -> (RgbImage, String) {
+        info!("Creating output image");
+
+        let mut out = RgbImage::new(img.width() * self.blocks.width, img.height() * self.blocks.height);
+        let mut text = String::new();
+    
+        info!("Generating output");
+    
+        for (x, y, pixel) in img.enumerate_pixels() {
+            let nearest = self.kdtree
+                .nearest(&[
+                    pixel.0[0] as f32 / 255.0,
+                    pixel.0[1] as f32 / 255.0,
+                    pixel.0[2] as f32 / 255.0,
+                ])
+                .unwrap()
+                .item;
+            let texel = &nearest.1;
+            text.push_str(
+                    &Fixed(texel.foreground_color)
+                        .on(Fixed(texel.background_color))
+                        .paint(texel.block.to_string()).to_string()
+                );
+            
+            if x + 1 == img.width() {
+                text.push('\n');
+            }
+            for i in 0..self.blocks.width {
+                for j in 0..self.blocks.height {
+                    out.put_pixel(
+                        x * self.blocks.width + i,
+                        y * self.blocks.height + j,
+                        if self.blocks.blocks[&texel.block][j as usize][i as usize] {
+                            let foreground_color = self.palette.colors[texel.foreground_color as usize];
+                            image::Rgb {
+                                0: foreground_color,
+                            }
+                        } else {
+                            let background_color = self.palette.colors[texel.background_color as usize];
+                            image::Rgb {
+                                0: background_color,
+                            }
+                        },
+                    );
+                }
+            }
+        }
+
+        return (out, text);
+    }
+}
+
 #[show_image::main]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
@@ -138,117 +268,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     .into_rgb8();
 
-    info!("Generating shades");
+    let ansifier = ANSIfier::new(palette, blocks);
 
-    let mut shades = Vec::new();
-    for (character, bitmap) in blocks.blocks.iter() {
-        shades.push(Shade {
-            ratio: count_foreground_pixels(bitmap) as f32 / (blocks.width * blocks.height) as f32,
-            block: *character,
-        });
-    }
+    let (out, text) = ansifier.process(&img);
 
-    info!("Generating texels");
-
-    let mut texels = Vec::new();
-
-    for shade in shades.iter() {
-        if ratio == 0.0 {
-            for (i, color) in palette.colors.iter().enumerate() {
-                texels.push((
-                    normalize_color(color),
-                    Texel {
-                        foreground_color: 0 as u8,
-                        background_color: i as u8,
-                        block: shade.block,
-                    },
-                ));
-            }
-        } else if ratio == 1.0 {
-            for (i, color) in palette.colors.iter().enumerate() {
-                texels.push((
-                    normalize_color(color),
-                    Texel {
-                        foreground_color: i as u8,
-                        background_color: 0 as u8,
-                        block: shade.block,
-                    },
-                ));
-            }
-        } else {
-            for (i, foreground_color) in palette.colors.iter().enumerate() {
-                for (j, background_color) in palette.colors.iter().enumerate() {
-                    if foreground_color == background_color {
-                        continue;
-                    }
-                    let color = blend_two_colors(
-                        &normalize_color(foreground_color),
-                        &normalize_color(background_color),
-                        shade.ratio,
-                    );
-                    texels.push((
-                        color,
-                        Texel {
-                            foreground_color: i as u8,
-                            background_color: j as u8,
-                            block: shade.block,
-                        },
-                    ));
-                }
-            }
-        }
-    }
-
-    info!("Generate kdtree");
-
-    let kdtree = KdMap::par_build_by_ordered_float(texels);
-
-    info!("Creating output image");
-
-    let mut out = RgbImage::new(img.width() * blocks.width, img.height() * blocks.height);
-
-    info!("Generating output");
-
-    for (x, y, pixel) in img.enumerate_pixels() {
-        let nearest = kdtree
-            .nearest(&[
-                pixel.0[0] as f32 / 255.0,
-                pixel.0[1] as f32 / 255.0,
-                pixel.0[2] as f32 / 255.0,
-            ])
-            .unwrap()
-            .item;
-        let texel = &nearest.1;
-        if cli.text {
-            print!(
-                "{}",
-                Fixed(texel.foreground_color)
-                    .on(Fixed(texel.background_color))
-                    .paint(texel.block.to_string())
-            );
-            if x + 1 == img.width() {
-                println!("");
-            }
-        }
-        for i in 0..blocks.width {
-            for j in 0..blocks.height {
-                out.put_pixel(
-                    x * blocks.width + i,
-                    y * blocks.height + j,
-                    if blocks.blocks[&texel.block][j as usize][i as usize] {
-                        let foreground_color = palette.colors[texel.foreground_color as usize];
-                        image::Rgb {
-                            0: foreground_color,
-                        }
-                    } else {
-                        let background_color = palette.colors[texel.background_color as usize];
-                        image::Rgb {
-                            0: background_color,
-                        }
-                    },
-                );
-            }
-        }
+    if cli.text {
+        print!("{}", text);
     }
 
     if let Some(output_path) = cli.output {
