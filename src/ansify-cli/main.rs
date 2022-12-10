@@ -1,7 +1,9 @@
 use ansify::{ANSIfier, Blocks, Palette};
 use clap::{Parser, Subcommand};
+use core::time::Duration;
 use image::gif::{GifDecoder, GifEncoder, Repeat};
 use image::io::Reader as ImageReader;
+use image::RgbaImage;
 use image::{AnimationDecoder, Delay, DynamicImage, Frame, GenericImageView};
 use log::info;
 use nokhwa::Camera;
@@ -194,7 +196,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 None
             };
 
-            let mut last_frame = (None, Instant::now());
+            let mut last_frame: Option<(RgbaImage, Instant)> = None;
 
             loop {
                 let original_image = camera.frame()?;
@@ -212,19 +214,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 info!("Showing image");
 
                 if let Some(ref mut enc) = encoder {
-                    if let (Some(real_last_frame), last_time) = last_frame {
-                        enc.encode_frame(Frame::from_parts(
-                            real_last_frame,
-                            0,
-                            0,
-                            Delay::from_saturating_duration(last_time.elapsed()),
-                        ))?;
+                    if let Some((ref real_last_frame, last_time)) = last_frame {
+                        if last_time.elapsed() > Duration::from_millis(10) {
+                            enc.encode_frame(Frame::from_parts(
+                                real_last_frame.clone(),
+                                0,
+                                0,
+                                Delay::from_saturating_duration(last_time.elapsed()),
+                            ))?;
+
+                            last_frame = None;
+                        }
                     }
 
-                    last_frame = (
-                        Some(DynamicImage::ImageRgb8(out.clone()).to_rgba8()),
-                        Instant::now(),
-                    );
+                    if last_frame.is_none() {
+                        last_frame = Some((
+                            DynamicImage::ImageRgb8(out.clone()).to_rgba8(),
+                            Instant::now(),
+                        ));
+                    }
                 }
 
                 if window.set_image("image", out).is_err() {
