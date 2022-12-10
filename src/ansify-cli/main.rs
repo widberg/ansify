@@ -1,4 +1,4 @@
-
+use ansify::{ANSIfier, Blocks, Palette};
 use clap::{Parser, Subcommand};
 use image::gif::{GifDecoder, GifEncoder, Repeat};
 use image::io::Reader as ImageReader;
@@ -10,9 +10,6 @@ use show_image::WindowOptions;
 use std::fs::File;
 use std::path::PathBuf;
 use std::time::Instant;
-
-mod ansify;
-use ansify::{ANSIfier, Blocks, Palette};
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -85,10 +82,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let original_image = ImageReader::open(input)?.decode()?;
 
             info!("Calculating dimension and resizing");
-            let new_dimensions = ansifier.calculate_new_dimensions(
-                original_image.dimensions(),
-                (cli.width, cli.height),
-            );
+            let new_dimensions = ansifier
+                .calculate_new_dimensions(original_image.dimensions(), (cli.width, cli.height));
             let img = original_image
                 .resize_exact(
                     new_dimensions.0,
@@ -140,10 +135,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let delay = frame.delay();
                 let original_image = DynamicImage::ImageRgba8(frame.into_buffer());
 
-                let new_dimensions = ansifier.calculate_new_dimensions(
-                    original_image.dimensions(),
-                    (cli.width, cli.height),
-                );
+                let new_dimensions = ansifier
+                    .calculate_new_dimensions(original_image.dimensions(), (cli.width, cli.height));
                 let img = original_image
                     .resize_exact(
                         new_dimensions.0,
@@ -177,10 +170,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             info!("Calculating dimension and resizing");
 
-            let new_dimensions = ansifier.calculate_new_dimensions(
-                original_image.dimensions(),
-                (cli.width, cli.height),
-            );
+            let new_dimensions = ansifier
+                .calculate_new_dimensions(original_image.dimensions(), (cli.width, cli.height));
 
             info!("Creating image window");
 

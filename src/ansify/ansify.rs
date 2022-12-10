@@ -1,12 +1,12 @@
 use ansi_term::Colour::Fixed;
-use image::{RgbImage};
+use image::RgbImage;
 use kd_tree::KdMap;
 use log::info;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::vec::Vec;
 use std::fs::File;
 use std::path::PathBuf;
+use std::vec::Vec;
 
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 pub struct Palette {
@@ -218,7 +218,7 @@ impl ANSIfier {
                                 foreground_color
                             } else {
                                 background_color
-                            }
+                            },
                         },
                     );
                 }
@@ -234,10 +234,10 @@ impl ANSIfier {
         desired_dimensions: (Option<u32>, Option<u32>),
     ) -> (u32, u32) {
         info!("Calculating dimension and resizing");
-    
+
         let ratio = (original_dimensions.0 as f32 / self.block_width() as f32)
             / (original_dimensions.1 as f32 / self.block_height() as f32);
-    
+
         return match desired_dimensions {
             (None, None) => original_dimensions,
             (Some(width), None) => (width, (width as f32 / ratio) as u32),
