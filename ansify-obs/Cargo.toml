@@ -1,0 +1,20 @@
+[package]
+name = "ansify-obs"
+version = "0.1.0"
+authors = ["widberg"]
+edition = "2021"
+description = "ansify"
+license = "MIT"
+repository = "https://github.com/widberg/ansify"
+
+[dependencies]
+ansify = { path = "../", version = "*" }
+clap = { version = "4.0.29", features = ["derive"] }
+env_logger = "0.10.0"
+image = "0.23"
+log = "0.4.17"
+obs-wrapper = { path = "../../rust-obs-plugins/", version = "*" }
+
+[lib]
+name = "ansify_obs"
+crate-type = ["cdylib"]

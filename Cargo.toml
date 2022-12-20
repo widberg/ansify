@@ -9,7 +9,8 @@ repository = "https://github.com/widberg/ansify"
 
 [workspace]
 members = [
-    "ansify-cli"
+    "ansify-cli",
+    "ansify-obs"
 ]
 
 [dependencies]
