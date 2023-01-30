@@ -3,24 +3,22 @@ use obs_wrapper::prelude::*;
 use obs_wrapper::source::*;
 use obs_wrapper::properties::*;
 use obs_wrapper::graphics::*;
-use ansify::*;
-use std::path::PathBuf;
-use image::DynamicImage;
-use std::slice::from_raw_parts;
-use image::ImageBuffer;
-use image::GenericImageView;
-use image::RgbaImage;
+use obs_wrapper::log::Logger;
 use image::Rgba;
-use obs_wrapper::media::VideoDataSourceContext;
-use obs_wrapper::media::video::*;
+use image::RgbaImage ;
 
 struct ANSIfyFilter {
     source: SourceContext,
     effect: GraphicsEffect,
-    image: GraphicsEffectTextureParam,
-    sampler: GraphicsSamplerState,
-    width: u32,
-    ansifier: Option<ANSIfier>,
+
+    lut: GraphicsEffectTextureParam,
+    map: GraphicsEffectTextureParam,
+    character_dimensions: GraphicsEffectVec2Param,
+    image_dimensions: GraphicsEffectVec2Param,
+    image_dimensions_i: GraphicsEffectVec2Param,
+    characters: GraphicsEffectVec2Param,
+    lut_texture: GraphicsTexture,
+    map_texture: GraphicsTexture,
 }
 
 struct ANSIfyModule {
@@ -41,33 +39,52 @@ impl Sourceable for ANSIfyFilter {
             obs_string!(include_str!("./ansify.effect")),
             obs_string!("ansify.effect"),
         )
-        .expect("Could not load ansify filter effect!");
-        let image = effect.get_effect_param_by_name(obs_string!("image")).expect("AAAA");
-
-        let sampler = GraphicsSamplerState::from(GraphicsSamplerInfo::default());
+        .expect("Could not load crop filter effect!");
 
         let settings = &mut create.settings;
         
-        let width = settings.get(obs_string!("width")).unwrap_or(80);
-        let palette_path = settings.get(obs_string!("palette_path")).unwrap_or(obs_string!("blocks.yaml"));
-        let blocks_path = settings.get(obs_string!("blocks_path")).unwrap_or(obs_string!("palette.yaml"));
+        if let (
+            Some(lut),
+            Some(map),
+            Some(character_dimensions),
+            Some(image_dimensions),
+            Some(image_dimensions_i),
+            Some(characters),
+        ) = (
+            effect.get_effect_param_by_name(obs_string!("lut")),
+            effect.get_effect_param_by_name(obs_string!("map")),
+            effect.get_effect_param_by_name(obs_string!("character_dimensions")),
+            effect.get_effect_param_by_name(obs_string!("image_dimensions")),
+            effect.get_effect_param_by_name(obs_string!("image_dimensions_i")),
+            effect.get_effect_param_by_name(obs_string!("characters")),
+        ) {
+            let lut_image_buffer = RgbaImage::from_pixel(1024, 1024, Rgba([255, 0, 0, 255]));
+            let mut lut_texture = GraphicsTexture::new(1024, 1024, GraphicsColorFormat::RGBA);
+            let lut_raw = lut_image_buffer.into_raw();
+            lut_texture.set_image(lut_raw.as_slice(), 1024 * 4, false);
 
-        let ansifier = if let (Ok(palette), Ok(blocks)) = (Palette::from(PathBuf::from(palette_path.as_str())), Blocks::from(PathBuf::from(blocks_path.as_str()))) {
-            Some(ANSIfier::new(palette, blocks))
-        } else {
-            None
-        };
+            let map_image_buffer = RgbaImage::from_pixel(1024, 1024, Rgba([0, 255, 0, 255]));
+            let mut map_texture = GraphicsTexture::new(1024, 1024, GraphicsColorFormat::RGBA);
+            let map_raw = map_image_buffer.into_raw();
+            map_texture.set_image(map_raw.as_slice(), 1024 * 4, false);
 
-        source.update_source_settings(settings);
+            source.update_source_settings(settings);
 
-        Self {
-            source,
-            effect,
-            image,
-            sampler,
-            width,
-            ansifier,
+            return Self {
+                source,
+                effect,
+                lut,
+                map,
+                character_dimensions,
+                image_dimensions,
+                image_dimensions_i,
+                characters,
+                lut_texture,
+                map_texture,
+            };
         }
+
+        panic!("Failed to find correct effect params!");
     }
 }
 
@@ -79,122 +96,70 @@ impl GetNameSource for ANSIfyFilter {
 
 impl GetPropertiesSource for ANSIfyFilter {
     fn get_properties(&mut self) -> Properties {
-        let mut properties = Properties::new();
-        properties
-            .add(
-                obs_string!("width"),
-                obs_string!("Number of characters wide"),
-                NumberProp::new_int().with_range(1u32..=256),
-            )
-            .add(
-                obs_string!("palette_path"),
-                obs_string!("Path to palette"),
-                PathProp::new(PathType::File)
-                    .with_filter(obs_string!("YAML (*.yaml *.yml)")),
-            )
-            .add(
-                obs_string!("blocks_path"),
-                obs_string!("Path to blocks"),
-                PathProp::new(PathType::File).with_filter(obs_string!("YAML (*.yaml *.yml)")),
-            );
-        
+        let properties = Properties::new();
         properties
     }
 }
 
 impl GetDefaultsSource for ANSIfyFilter {
-    fn get_defaults(setings: &mut DataObj<'_>) {
-        setings.set_default::<u32>(obs_string!("width"), 80u32);
+    fn get_defaults(_setings: &mut DataObj<'_>) {
     }
 }
 
 impl UpdateSource for ANSIfyFilter {
-    fn update(&mut self, settings: &mut DataObj, _context: &mut GlobalContext) {
-        if let Some(width) = settings.get::<u32>(obs_string!("width")) {
-            self.width = width;
-        }
-
-        if let (Some(palette_path), Some(blocks_path)) = (settings.get::<ObsString>(obs_string!("palette_path")), settings.get::<ObsString>(obs_string!("blocks_path"))) {
-            self.ansifier = if let (Ok(palette), Ok(blocks)) = (Palette::from(PathBuf::from(palette_path.as_str())), Blocks::from(PathBuf::from(blocks_path.as_str()))) {
-                Some(ANSIfier::new(palette, blocks))
-            } else {
-                None
-            };
-        }
+    fn update(&mut self, _settings: &mut DataObj, _context: &mut GlobalContext) {
     }
 }
 
 impl VideoRenderSource for ANSIfyFilter {
     fn video_render(&mut self, _context: &mut GlobalContext, render: &mut VideoRenderContext) {
-        if let Some(ansifier) = &self.ansifier {
-            // let video_width = video.width();
-            // let video_height = video.height();
-            // let original_image = match video.format() {
-            //     VideoFormat::RGBA => {
-            //         let data_length = video_width * video_height * 4;
-            //         let data = Vec::from(unsafe { from_raw_parts(video.data_buffer(0), data_length as usize) });
-            //         DynamicImage::ImageRgba8(ImageBuffer::from_raw(video_width, video_height, data).expect("Container too small"))
-            //     }
-            //     _ => panic!("Bad format")
-            // };
+        let data = self;
+        let effect = &mut data.effect;
+        let source = &mut data.source;
 
-            // let width = self.width;
+        let lut = &mut data.lut;
+        let map = &mut data.map;
+        let character_dimensions = &mut data.character_dimensions;
+        let image_dimensions = &mut data.image_dimensions;
+        let image_dimensions_i = &mut data.image_dimensions_i;
+        let characters = &mut data.characters;
+        let lut_texture = &mut data.lut_texture;
+        let map_texture = &mut data.map_texture;
 
-            // let new_dimensions = ansifier
-            // .calculate_new_dimensions(original_image.dimensions(), (Some(width), None));
-            // let img = original_image
-            // .resize_exact(
-            //     new_dimensions.0,
-            //     new_dimensions.1,
-            //     image::imageops::Lanczos3,
-            // )
-            // .into_rgb8();
-            
-            // let (out, _text) = ansifier.process(&img);
+        let mut target_cx: u32 = 1;
+        let mut target_cy: u32 = 1;
 
-            // self.img = Some(DynamicImage::ImageRgb8(out).to_rgba8());
-            
-            let img = ImageBuffer::from_fn(1024, 1024, |_x, _y| {
-                Rgba([255, 0, 255, 255])
-            });
+        let cx = source.get_base_width();
+        let cy = source.get_base_height();
 
-            let source = &mut self.source;
-            let effect = &mut self.effect;
-            let image = &mut self.image;
-            let sampler = &mut self.sampler;
+        source.do_with_target(|target| {
+            target_cx = target.get_base_width();
+            target_cy = target.get_base_height();
+        });
 
-            let image_cx = img.width();
-            let image_cy = img.height();
-
-            let mut texture = GraphicsTexture::new(image_cx, image_cy, GraphicsColorFormat::RGBA);
-            texture.set_image(img.into_raw().as_slice(), image_cx * 4, false);
-            image.set_texture(&mut texture);
-
-            source.process_filter_tech(
-                render,
-                effect,
-                (image_cx, image_cy),
-                GraphicsColorFormat::RGBA,
-                GraphicsAllowDirectRendering::NoDirectRendering,
-                obs_string!("Draw"),
-                |context, _effect| {
-                },
-            );
-
-            source.effect_loop(
-                render,
-                effect,
-                obs_string!("Draw"),
-                |context, _effect| {
-                    texture.draw(0, 0, 0, 0, false);
-                },
-            );
-        }
+        source.process_filter_tech(
+            render,
+            effect,
+            (target_cx, target_cy),
+            GraphicsColorFormat::RGBA,
+            GraphicsAllowDirectRendering::NoDirectRendering,
+            obs_string!("Draw"),
+            |context, _effect| {
+                lut.set_texture(context, &lut_texture);
+                map.set_texture(context, &map_texture);
+                character_dimensions.set_vec2(context, &Vec2::new(15., 20.));
+                image_dimensions.set_vec2(context, &Vec2::new(cx as _, cy as _));
+                image_dimensions_i.set_vec2(context, &Vec2::new(1. / (cx as f32), 1. / (cy as f32)));
+                characters.set_vec2(context, &Vec2::new(60., 40.));
+            },
+        );
     }
 }
 
 impl Module for ANSIfyModule {
     fn new(context: ModuleContext) -> Self {
+        let _ = Logger::new().init();
+
         Self { context }
     }
     
@@ -220,9 +185,11 @@ impl Module for ANSIfyModule {
     fn description() -> ObsString {
         obs_string!("A filter that ANSIfys a source.")
     }
+
     fn name() -> ObsString {
         obs_string!("ANSIfy")
     }
+
     fn author() -> ObsString {
         obs_string!("widberg")
     }
