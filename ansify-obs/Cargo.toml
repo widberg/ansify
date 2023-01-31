@@ -16,3 +16,6 @@ obs-wrapper = { path = "../../rust-obs-plugins/", version = "*" }
 [lib]
 name = "ansify_obs"
 crate-type = ["cdylib"]
+
+[features]
+rayon = ["ansify/rayon"]

@@ -1,5 +1,5 @@
 use ansi_term::Colour::Fixed;
-use image::RgbImage;
+use image::{RgbImage, RgbaImage, Rgb, Rgba};
 use kd_tree::KdMap;
 use log::info;
 use serde::{Deserialize, Serialize};
@@ -7,6 +7,11 @@ use std::collections::BTreeMap;
 use std::fs::File;
 use std::path::PathBuf;
 use std::vec::Vec;
+
+#[cfg(feature = "rayon")]
+use std::sync::Mutex;
+#[cfg(feature = "rayon")]
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 pub struct Palette {
@@ -169,7 +174,7 @@ impl ANSIfier {
             blocks,
             #[cfg(feature = "rayon")]
             kdtree: KdMap::par_build_by_ordered_float(texels),
-            #[cfg(not(feature = "std"))]
+            #[cfg(not(feature = "rayon"))]
             kdtree: KdMap::build_by_ordered_float(texels),
         };
     }
@@ -213,7 +218,7 @@ impl ANSIfier {
                     out.put_pixel(
                         x * self.blocks.width + i,
                         y * self.blocks.height + j,
-                        image::Rgb {
+                        Rgb {
                             0: if self.blocks.blocks[&texel.block][j as usize][i as usize] {
                                 foreground_color
                             } else {
@@ -252,5 +257,128 @@ impl ANSIfier {
 
     pub fn block_height(&self) -> u32 {
         self.blocks.height()
+    }
+
+    pub fn generate_lut_and_map(&self) -> (RgbaImage, RgbaImage) {
+        assert!(self.palette.colors.len() <= 256);
+        assert!(self.blocks.blocks.len() <= 256);
+        assert!(self.block_width() * self.block_height() <= 32);
+
+        let mut char_to_idx = BTreeMap::<char, u8>::new();
+        let mut idx_to_char = Vec::<char>::new();
+        let mut i = 0u8;
+        for (key, _val) in &self.blocks.blocks {
+            char_to_idx.insert(*key, i);
+            idx_to_char.push(*key);
+            i += 1;
+        }
+
+        let lut = RgbaImage::from_fn(4096, 4096, |x, y| {
+            let r = x & 0xFF;
+            let g = y & 0xFF;
+            let b = ((x >> 8) & 0xF) | (((y >> 8) & 0xF) << 4);
+            
+            let nearest = self
+                .kdtree
+                .nearest(&[
+                    r as f32 / 255.0,
+                    g as f32 / 255.0,
+                    b as f32 / 255.0,
+                ])
+                .unwrap()
+                .item;
+            let texel = &nearest.1;
+            let block_idx = char_to_idx[&texel.block];
+            Rgba([texel.foreground_color as u8, texel.background_color as u8,  block_idx as u8, 255])
+        });
+
+        let mut map = RgbaImage::new(256, 2);
+        for x in 0..self.palette.colors.len() {
+            let color = self.palette.colors[x as usize];
+            map.put_pixel(x as u32, 0u32, Rgba([color[0], color[1], color[2], 255]));
+        }
+
+        for j in 0..idx_to_char.len() {
+            let block = &self.blocks.blocks[&idx_to_char[j]];
+            let mut bits = 0u32;
+            for x in 0..self.block_width() {
+                for y in 0..self.block_height() {
+                    bits |= (block[y as usize][x as usize] as u32) << (x + y * self.block_width());
+                }
+            }
+            let r = (bits & 0xFF) as u8;
+            let g = ((bits >> 8) & 0xFF) as u8;
+            let b = ((bits >> 16) & 0xFF) as u8;
+            let a = (bits >> 24) as u8;
+            map.put_pixel(j as u32, 1u32, Rgba([r, g, b, a]));
+        }
+
+        (lut, map)
+    }
+
+    #[cfg(feature = "rayon")]
+    pub fn par_generate_lut_and_map(&self) -> (RgbaImage, RgbaImage) {
+        assert!(self.palette.colors.len() <= 256);
+        assert!(self.blocks.blocks.len() <= 256);
+        assert!(self.block_width() * self.block_height() <= 32);
+
+        let mut char_to_idx = BTreeMap::<char, u8>::new();
+        let mut idx_to_char = Vec::<char>::new();
+        let mut i = 0u8;
+        for (key, _val) in &self.blocks.blocks {
+            char_to_idx.insert(*key, i);
+            idx_to_char.push(*key);
+            i += 1;
+        }
+
+        let lut = RgbaImage::new(4096, 4096);
+        let lut_dimensions = lut.dimensions();
+        let lut_mutex = Mutex::new(lut);
+
+        (0..lut_dimensions.0).into_par_iter().for_each(|x| {
+            (0..lut_dimensions.1).into_par_iter().for_each(|y| {
+                let r = x & 0xFF;
+                let g = y & 0xFF;
+                let b = ((x >> 8) & 0xF) | (((y >> 8) & 0xF) << 4);
+                
+                let nearest = self
+                    .kdtree
+                    .nearest(&[
+                        r as f32 / 255.0,
+                        g as f32 / 255.0,
+                        b as f32 / 255.0,
+                    ])
+                    .unwrap()
+                    .item;
+                let texel = &nearest.1;
+                let block_idx = char_to_idx[&texel.block];
+                lut_mutex.lock().unwrap().put_pixel(x as u32, y as u32, Rgba([texel.foreground_color as u8, texel.background_color as u8,  block_idx as u8, 255]));
+            })
+        });
+
+        let map = RgbaImage::new(256, 2);
+        let map_mutex = Mutex::new(map);
+
+        (0..self.palette.colors.len()).into_par_iter().for_each(|x| {
+            let color = self.palette.colors[x as usize];
+            map_mutex.lock().unwrap().put_pixel(x as u32, 0u32, Rgba([color[0], color[1], color[2], 255]));
+        });
+
+        (0..idx_to_char.len()).into_par_iter().for_each(|j| {
+            let block = &self.blocks.blocks[&idx_to_char[j]];
+            let mut bits = 0u32;
+            for x in 0..self.block_width() {
+                for y in 0..self.block_height() {
+                    bits |= (block[y as usize][x as usize] as u32) << (x + y * self.block_width());
+                }
+            }
+            let r = (bits & 0xFF) as u8;
+            let g = ((bits >> 8) & 0xFF) as u8;
+            let b = ((bits >> 16) & 0xFF) as u8;
+            let a = (bits >> 24) as u8;
+            map_mutex.lock().unwrap().put_pixel(j as u32, 1u32, Rgba([r, g, b, a]));
+        });
+
+        (lut_mutex.into_inner().unwrap(), map_mutex.into_inner().unwrap())
     }
 }

@@ -4,12 +4,16 @@ use obs_wrapper::source::*;
 use obs_wrapper::properties::*;
 use obs_wrapper::graphics::*;
 use obs_wrapper::log::Logger;
-use image::Rgba;
-use image::RgbaImage ;
+use std::path::PathBuf;
+use ansify::{ANSIfier, Blocks, Palette};
 
 struct ANSIfyFilter {
+    image: GraphicsEffectTextureParam,
     source: SourceContext,
     effect: GraphicsEffect,
+    sampler: GraphicsSamplerState,
+
+    ansifier: ANSIfier,
 
     lut: GraphicsEffectTextureParam,
     map: GraphicsEffectTextureParam,
@@ -44,6 +48,7 @@ impl Sourceable for ANSIfyFilter {
         let settings = &mut create.settings;
         
         if let (
+            Some(image),
             Some(lut),
             Some(map),
             Some(character_dimensions),
@@ -51,6 +56,7 @@ impl Sourceable for ANSIfyFilter {
             Some(image_dimensions_i),
             Some(characters),
         ) = (
+            effect.get_effect_param_by_name(obs_string!("image")),
             effect.get_effect_param_by_name(obs_string!("lut")),
             effect.get_effect_param_by_name(obs_string!("map")),
             effect.get_effect_param_by_name(obs_string!("character_dimensions")),
@@ -58,21 +64,41 @@ impl Sourceable for ANSIfyFilter {
             effect.get_effect_param_by_name(obs_string!("image_dimensions_i")),
             effect.get_effect_param_by_name(obs_string!("characters")),
         ) {
-            let lut_image_buffer = RgbaImage::from_pixel(1024, 1024, Rgba([255, 0, 0, 255]));
-            let mut lut_texture = GraphicsTexture::new(1024, 1024, GraphicsColorFormat::RGBA);
-            let lut_raw = lut_image_buffer.into_raw();
-            lut_texture.set_image(lut_raw.as_slice(), 1024 * 4, false);
+            let palette = Palette::from(PathBuf::from("D:/waywrd/img2ansi/res/256.yaml"));
+            let blocks = Blocks::from(PathBuf::from("D:/waywrd/img2ansi/res/tiny.yaml"));
+            let ansifier = ANSIfier::new(palette.unwrap(), blocks.unwrap());
 
-            let map_image_buffer = RgbaImage::from_pixel(1024, 1024, Rgba([0, 255, 0, 255]));
-            let mut map_texture = GraphicsTexture::new(1024, 1024, GraphicsColorFormat::RGBA);
+            #[cfg(feature = "rayon")]
+            let (lut_image_buffer, map_image_buffer) = ansifier.par_generate_lut_and_map();
+            #[cfg(not(feature = "rayon"))]
+            let (lut_image_buffer, map_image_buffer) = ansifier.generate_lut_and_map();
+
+            let lut_image_buffer_dimensions = lut_image_buffer.dimensions();
+            let mut lut_texture = GraphicsTexture::new(lut_image_buffer_dimensions.0, lut_image_buffer_dimensions.1, GraphicsColorFormat::RGBA);
+            let lut_raw = lut_image_buffer.into_raw();
+            lut_texture.set_image(lut_raw.as_slice(), lut_image_buffer_dimensions.0 * 4, false);
+
+            let map_image_buffer_dimensions = map_image_buffer.dimensions();
+            let mut map_texture = GraphicsTexture::new(map_image_buffer_dimensions.0, map_image_buffer_dimensions.1, GraphicsColorFormat::RGBA);
             let map_raw = map_image_buffer.into_raw();
-            map_texture.set_image(map_raw.as_slice(), 1024 * 4, false);
+            map_texture.set_image(map_raw.as_slice(), map_image_buffer_dimensions.0 * 4, false);
+
+            let sampler = GraphicsSamplerState::from(GraphicsSamplerInfo::default()
+                .with_address_u(GraphicsAddressMode::Clamp)
+                .with_address_v(GraphicsAddressMode::Clamp)
+                .with_address_w(GraphicsAddressMode::Clamp)
+                .with_filter(GraphicsSampleFilter::Point));
 
             source.update_source_settings(settings);
 
             return Self {
+                image,
                 source,
                 effect,
+                sampler,
+
+                ansifier,
+
                 lut,
                 map,
                 character_dimensions,
@@ -114,8 +140,13 @@ impl UpdateSource for ANSIfyFilter {
 impl VideoRenderSource for ANSIfyFilter {
     fn video_render(&mut self, _context: &mut GlobalContext, render: &mut VideoRenderContext) {
         let data = self;
+
+        let ansifier = &mut data.ansifier;
+
+        let image = &mut data.image;
         let effect = &mut data.effect;
         let source = &mut data.source;
+        let sampler = &mut data.sampler;
 
         let lut = &mut data.lut;
         let map = &mut data.map;
@@ -132,6 +163,8 @@ impl VideoRenderSource for ANSIfyFilter {
         let cx = source.get_base_width();
         let cy = source.get_base_height();
 
+        let dimensions = ansifier.calculate_new_dimensions((cx, cy), (Some(256), None));
+
         source.do_with_target(|target| {
             target_cx = target.get_base_width();
             target_cy = target.get_base_height();
@@ -147,10 +180,12 @@ impl VideoRenderSource for ANSIfyFilter {
             |context, _effect| {
                 lut.set_texture(context, &lut_texture);
                 map.set_texture(context, &map_texture);
-                character_dimensions.set_vec2(context, &Vec2::new(15., 20.));
+                character_dimensions.set_vec2(context, &Vec2::new(ansifier.block_width() as f32, ansifier.block_height() as f32));
                 image_dimensions.set_vec2(context, &Vec2::new(cx as _, cy as _));
                 image_dimensions_i.set_vec2(context, &Vec2::new(1. / (cx as f32), 1. / (cy as f32)));
-                characters.set_vec2(context, &Vec2::new(60., 40.));
+                characters.set_vec2(context, &Vec2::new(dimensions.0 as f32, dimensions.1 as f32));
+
+                image.set_next_sampler(context, sampler);
             },
         );
     }

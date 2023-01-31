@@ -32,31 +32,56 @@ VertInOut VSDefault(VertInOut vert_in)
 	return vert_out;
 }
 
-float4 GetAveragedPixelatedColor(float2 uv)
-{
-    float d = characters * image_dimensions_i;
-    float2 start = d * floor(uv / d);
-	float2 dd = image_dimensions / characters;
-
-    float4 accumulation = float4(0.0f, 0.0f, 0.0f, 0.0f);
-
-    for (float x = 0; x < dd.x; x++)
-    {
-        for (float y = 0; y < dd.y; y++)
-        {
-            float2 offset = float2(x, y) * image_dimensions_i;
-            accumulation += image.Sample(linear_sampler, start + offset);
-        }
-    }
-
-    accumulation /= dd.x * dd.y;
-
-	return accumulation;
-}
-
 float4 PSANSIfy(VertInOut vert_in) : TARGET
 {
-    return GetAveragedPixelatedColor(vert_in.uv);
+	float2 d = 1.0 / characters;
+	float2 cc = d * floor(vert_in.uv / d);
+	float2 dd = image_dimensions / characters;
+	
+    float4 accumulation = float4(0.0f, 0.0f, 0.0f, 0.0f);
+
+	float2 ddd = d / 4;
+
+	accumulation += image.Sample(linear_sampler, cc + ddd);
+	accumulation += image.Sample(linear_sampler, cc + d / 2);
+	accumulation += image.Sample(linear_sampler, cc + d - ddd);
+	accumulation += image.Sample(linear_sampler, cc + d - float2(0.0f, ddd.y));
+	accumulation += image.Sample(linear_sampler, cc + d - float2(ddd.x, 0.0f));
+
+    float4 color = accumulation / 5;
+
+	uint r = color.r * 255;
+	uint g = color.g * 255;
+	uint b = color.b * 255;
+
+	uint x = r | ((b & 0xF) << 8);
+	uint y = g | ((b >> 4) << 8);
+
+	float4 result = lut.Sample(point_sampler, float2(x / 4095.0f, y / 4095.0f));
+
+	float4 forground_color = map.Sample(point_sampler, float2(result.r, 0));
+	float4 background_color = map.Sample(point_sampler, float2(result.g, 0));
+	float4 block = map.Sample(point_sampler, float2(result.b, 1));
+
+	uint br = block.r * 255;
+	uint bg = block.g * 255;
+	uint bb = block.b * 255;
+	uint ba = block.a * 255;
+
+	uint block_bits = br | (bg << 8) | (bb << 16) | (ba << 24);
+
+	float2 m = vert_in.uv - cc;
+	float2 cd = d / character_dimensions;
+	uint mx = m.x / cd.x;
+	uint my = m.y / cd.y;
+
+	uint cw = character_dimensions.x;
+
+	uint bit = (block_bits >> (mx + my * cw)) & 1;
+
+	if (bit) return float4(forground_color.rgb, color.a);
+
+	return float4(background_color.rgb, color.a);
 }
 
 technique Draw
