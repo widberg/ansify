@@ -14,6 +14,7 @@ struct ANSIfyFilter {
     sampler: GraphicsSamplerState,
 
     ansifier: ANSIfier,
+    width: u32,
 
     lut: GraphicsEffectTextureParam,
     map: GraphicsEffectTextureParam,
@@ -64,20 +65,21 @@ impl Sourceable for ANSIfyFilter {
             effect.get_effect_param_by_name(obs_string!("image_dimensions_i")),
             effect.get_effect_param_by_name(obs_string!("characters")),
         ) {
+            let width = settings.get(obs_string!("width")).unwrap_or(80u32);
             let palette = Palette::from(PathBuf::from("D:/waywrd/img2ansi/res/256.yaml"));
             let blocks = Blocks::from(PathBuf::from("D:/waywrd/img2ansi/res/tiny.yaml"));
             let ansifier = ANSIfier::new(palette.unwrap(), blocks.unwrap());
-
+    
             #[cfg(feature = "rayon")]
             let (lut_image_buffer, map_image_buffer) = ansifier.par_generate_lut_and_map();
             #[cfg(not(feature = "rayon"))]
             let (lut_image_buffer, map_image_buffer) = ansifier.generate_lut_and_map();
-
+    
             let lut_image_buffer_dimensions = lut_image_buffer.dimensions();
             let mut lut_texture = GraphicsTexture::new(lut_image_buffer_dimensions.0, lut_image_buffer_dimensions.1, GraphicsColorFormat::RGBA);
             let lut_raw = lut_image_buffer.into_raw();
             lut_texture.set_image(lut_raw.as_slice(), lut_image_buffer_dimensions.0 * 4, false);
-
+    
             let map_image_buffer_dimensions = map_image_buffer.dimensions();
             let mut map_texture = GraphicsTexture::new(map_image_buffer_dimensions.0, map_image_buffer_dimensions.1, GraphicsColorFormat::RGBA);
             let map_raw = map_image_buffer.into_raw();
@@ -98,6 +100,7 @@ impl Sourceable for ANSIfyFilter {
                 sampler,
 
                 ansifier,
+                width,
 
                 lut,
                 map,
@@ -122,18 +125,26 @@ impl GetNameSource for ANSIfyFilter {
 
 impl GetPropertiesSource for ANSIfyFilter {
     fn get_properties(&mut self) -> Properties {
-        let properties = Properties::new();
+        let mut properties = Properties::new();
+        properties
+            .add(
+                obs_string!("width"),
+                obs_string!("Number of characters wide"),
+                NumberProp::new_int().with_range(1u32..=1024).with_slider(),
+            );
         properties
     }
 }
 
 impl GetDefaultsSource for ANSIfyFilter {
-    fn get_defaults(_setings: &mut DataObj<'_>) {
+    fn get_defaults(setings: &mut DataObj<'_>) {
+        setings.set_default::<u32>(obs_string!("width"), 80u32);
     }
 }
 
 impl UpdateSource for ANSIfyFilter {
-    fn update(&mut self, _settings: &mut DataObj, _context: &mut GlobalContext) {
+    fn update(&mut self, settings: &mut DataObj, _context: &mut GlobalContext) {
+        self.width = settings.get(obs_string!("width")).unwrap_or(80u32);
     }
 }
 
@@ -142,6 +153,7 @@ impl VideoRenderSource for ANSIfyFilter {
         let data = self;
 
         let ansifier = &mut data.ansifier;
+        let width = data.width;
 
         let image = &mut data.image;
         let effect = &mut data.effect;
@@ -163,7 +175,7 @@ impl VideoRenderSource for ANSIfyFilter {
         let cx = source.get_base_width();
         let cy = source.get_base_height();
 
-        let dimensions = ansifier.calculate_new_dimensions((cx, cy), (Some(256), None));
+        let dimensions = ansifier.calculate_new_dimensions((cx, cy), (Some(width), None));
 
         source.do_with_target(|target| {
             target_cx = target.get_base_width();
