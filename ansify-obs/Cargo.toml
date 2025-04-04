@@ -9,9 +9,9 @@ repository = "https://github.com/widberg/ansify"
 
 [dependencies]
 ansify = { path = "../", version = "*" }
-image = "0.23"
+image = "0.25.6"
 log = "0.4.17"
-obs-wrapper = { path = "../../rust-obs-plugins/", version = "*" }
+obs-wrapper = { git = "https://github.com/bennetthardwick/rust-obs-plugins", version = "*" }
 
 [lib]
 name = "ansify_obs"

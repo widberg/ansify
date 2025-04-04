@@ -169,13 +169,17 @@ impl ANSIfier {
 
         info!("Generate kdtree");
 
+        #[cfg(feature = "rayon")]
+        let kdtree = KdMap::par_build_by_ordered_float(texels);
+        #[cfg(not(feature = "rayon"))]
+        let kdtree = KdMap::build_by_ordered_float(texels);
+
+        info!("KdTree generated");
+
         return ANSIfier {
             palette,
             blocks,
-            #[cfg(feature = "rayon")]
-            kdtree: KdMap::par_build_by_ordered_float(texels),
-            #[cfg(not(feature = "rayon"))]
-            kdtree: KdMap::build_by_ordered_float(texels),
+            kdtree,
         };
     }
 

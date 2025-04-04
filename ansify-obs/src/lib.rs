@@ -1,3 +1,4 @@
+use log::info;
 use obs_wrapper::{ obs_register_module, obs_string };
 use obs_wrapper::prelude::*;
 use obs_wrapper::source::*;
@@ -9,7 +10,7 @@ use ansify::{ANSIfier, Blocks, Palette};
 
 struct ANSIfyFilter {
     image: GraphicsEffectTextureParam,
-    source: SourceContext,
+    source: SourceRef,
     effect: GraphicsEffect,
     sampler: GraphicsSamplerState,
 
@@ -27,7 +28,7 @@ struct ANSIfyFilter {
 }
 
 struct ANSIfyModule {
-    context: ModuleContext,
+    context: ModuleRef,
 }
 
 impl Sourceable for ANSIfyFilter {
@@ -36,10 +37,10 @@ impl Sourceable for ANSIfyFilter {
     }
 
     fn get_type() -> SourceType {
-        SourceType::FILTER
+        SourceType::Filter
     }
 
-    fn create(create: &mut CreatableSourceContext<Self>, mut source: SourceContext) -> Self {
+    fn create(create: &mut CreatableSourceContext<Self>, mut source: SourceRef) -> Self {
         let mut effect = GraphicsEffect::from_effect_string(
             obs_string!(include_str!("./ansify.effect")),
             obs_string!("ansify.effect"),
@@ -74,12 +75,16 @@ impl Sourceable for ANSIfyFilter {
                     Palette::from(PathBuf::from(palette_path.as_str())),
                     Blocks::from(PathBuf::from(blocks_path.as_str()))) {
                     let ansifier = ANSIfier::new(palette, blocks);
+
+                    info!("Created ANSIfier with palette: {} and blocks: {}", palette_path.as_str(), blocks_path.as_str());
             
                     #[cfg(feature = "rayon")]
                     let (lut_image_buffer, map_image_buffer) = ansifier.par_generate_lut_and_map();
                     #[cfg(not(feature = "rayon"))]
                     let (lut_image_buffer, map_image_buffer) = ansifier.generate_lut_and_map();
             
+                    info!("Generated LUT and map for ANSIfier with palette: {} and blocks: {}", palette_path.as_str(), blocks_path.as_str());
+
                     let lut_image_buffer_dimensions = lut_image_buffer.dimensions();
                     let mut lut_texture = GraphicsTexture::new(lut_image_buffer_dimensions.0, lut_image_buffer_dimensions.1, GraphicsColorFormat::RGBA);
                     let lut_raw = lut_image_buffer.into_raw();
@@ -105,6 +110,8 @@ impl Sourceable for ANSIfyFilter {
                 .with_filter(GraphicsSampleFilter::Point));
 
             source.update_source_settings(settings);
+
+            info!("Created ANSIfy filter with width: {}", width);
 
             return Self {
                 image,
@@ -266,13 +273,13 @@ impl VideoRenderSource for ANSIfyFilter {
 }
 
 impl Module for ANSIfyModule {
-    fn new(context: ModuleContext) -> Self {
+    fn new(context: ModuleRef) -> Self {
         let _ = Logger::new().init();
 
         Self { context }
     }
     
-    fn get_ctx(&self) -> &ModuleContext {
+    fn get_ctx(&self) -> &ModuleRef {
         &self.context
     }
 
